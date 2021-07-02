@@ -94,6 +94,30 @@ def locked(func):
     with_lock = wraps(func)(with_lock)
     return with_lock
 
+def read_locked(func):
+    """ Decorator for using the self._rwlock argument of the calling instance """
+    def with_lock(*args, **kwargs):
+        self = args[0]
+        self._rwlock.acquire_read_lock()
+        try:
+            return func(*args, **kwargs)
+        finally:
+            self._rwlock.release_read_lock()
+    with_lock = wraps(func)(with_lock)
+    return with_lock
+
+def write_locked(func):
+    """ Decorator for using the self._rwlock argument of the calling instance """
+    def with_lock(*args, **kwargs):
+        self = args[0]
+        self._rwlock.acquire_write_lock()
+        try:
+            return func(*args, **kwargs)
+        finally:
+            self._rwlock.release_write_lock()
+    with_lock = wraps(func)(with_lock)
+    return with_lock
+
 
 class TimeIt (object):
 

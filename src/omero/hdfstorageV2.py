@@ -27,7 +27,8 @@ import omero.callbacks
 # For ease of use
 from omero.columns import columns2definition
 from omero.rtypes import rfloat, rlong, rstring, unwrap
-from omero.util.decorators import locked
+from omero.util.decorators import locked, read_locked, write_locked
+from omero.util.readerswriterlock import ReadersWriterLock
 from omero_ext.path import path
 from omero_ext import portalocker
 from functools import wraps
@@ -113,10 +114,11 @@ class HdfList(object):
     def __init__(self):
         self.logger = logging.getLogger("omero.tables.HdfList")
         self._lock = threading.RLock()
+        self._rwlock = ReadersWriterLock()
         self.__filenos = {}
         self.__paths = {}
 
-    @locked
+    @write_locked
     def addOrThrow(self, hdfpath, hdfstorage, read_only=False):
 
         if hdfpath in self.__paths:
@@ -155,14 +157,14 @@ class HdfList(object):
 
         return hdffile
 
-    @locked
+    @write_locked
     def getOrCreate(self, hdfpath, table, read_only=False):
         storage = None
         try:
             storage = self.__paths[hdfpath]
         except KeyError:
             # Adds itself to the global list
-            storage = HdfStorage(hdfpath, self._lock, read_only=read_only)
+            storage = HdfStorage(hdfpath, self._lock, self._rwlock, read_only=read_only)
         storage.incr(table)
         return storage
 
@@ -182,7 +184,7 @@ class HdfStorage(object):
     instance will be available for any given physical HDF5 file.
     """
 
-    def __init__(self, file_path, hdf5lock, read_only=False):
+    def __init__(self, file_path, hdf5lock, rwlock, read_only=False):
         """
         file_path should be the path to a file in a valid directory where
         this HDF instance can be stored (Not None or Empty). Once this
@@ -202,6 +204,7 @@ class HdfStorage(object):
         self.__tables = []
 
         self._lock = hdf5lock
+        self._rwlock = rwlock
         self._stamp = time.time()
 
         # These are what we'd like to have
@@ -330,7 +333,7 @@ class HdfStorage(object):
     # Locked methods
     #
 
-    @locked
+    @write_locked
     def flush(self):
         """
         Flush writes to the underlying table, mark this object as modified
@@ -340,7 +343,7 @@ class HdfStorage(object):
             self.__mea.flush()
         self.logger.debug("Modified flag set")
 
-    @locked
+    @write_locked
     @modifies
     def initialize(self, cols, metadata=None):
         """
@@ -385,7 +388,7 @@ class HdfStorage(object):
         self.__hdf_file.flush()
         self.__initialized = True
 
-    @locked
+    @write_locked
     def incr(self, table):
         sz = len(self.__tables)
         self.logger.info("Size: %s - Attaching %s to %s" %
@@ -396,7 +399,7 @@ class HdfStorage(object):
         self.__tables.append(table)
         return sz + 1
 
-    @locked
+    @write_locked
     def decr(self, table):
         sz = len(self.__tables)
         self.logger.info(
@@ -409,16 +412,16 @@ class HdfStorage(object):
             self.cleanup()
         return sz - 1
 
-    @locked
+    @read_locked
     def uptodate(self, stamp):
         return self._stamp <= stamp
 
-    @locked
+    @read_locked
     def rows(self):
         self.__initcheck()
         return self.__mea.nrows
 
-    @locked
+    @read_locked
     def cols(self, size, current):
         self.__initcheck()
         ic = current.adapter.getCommunicator()
@@ -447,7 +450,7 @@ class HdfStorage(object):
                     None, msg, "BAD COLUMN TYPE: %s for %s" % (t, n))
         return cols
 
-    @locked
+    @read_locked
     def get_meta_map(self):
         self.__initcheck()
         metadata = {}
@@ -468,7 +471,7 @@ class HdfStorage(object):
             metadata[key] = val
         return metadata
 
-    @locked
+    @write_locked
     @modifies
     def add_meta_map(self, m, replace=False, init=False):
         if not init:
@@ -504,7 +507,7 @@ class HdfStorage(object):
             # convert it to a numpy type or keep it as a native Python type
             attr[k] = unwrap(v)
 
-    @locked
+    @write_locked
     @modifies
     def append(self, cols):
         self.__initcheck()
@@ -532,7 +535,7 @@ class HdfStorage(object):
     # Stamped methods
     #
 
-    @stamped
+    @write_locked
     @modifies
     def update(self, stamp, data):
         self.__initcheck()
@@ -541,7 +544,7 @@ class HdfStorage(object):
                 for col in data.columns:
                     getattr(self.__mea.cols, col.name)[rn] = col.values[i]
 
-    @stamped
+    @read_locked
     def getWhereList(self, stamp, condition, variables, unused,
                      start, stop, step):
         self.__initcheck()
@@ -566,8 +569,8 @@ class HdfStorage(object):
         data.lastModification = int(self._stamp * 1000)
         return data
 
-    @stamped
-    def readCoordinates(self, stamp, rowNumbers, current):
+    @read_locked
+    def readCoordinates(self, rowNumbers, current):
         self.__initcheck()
         self.__sizecheck(None, rowNumbers)
         cols = self.cols(None, current)
@@ -575,8 +578,8 @@ class HdfStorage(object):
             col.readCoordinates(self.__mea, rowNumbers)
         return self._as_data(cols, rowNumbers)
 
-    @stamped
-    def read(self, stamp, colNumbers, start, stop, current):
+    @read_locked
+    def read(self, colNumbers, start, stop, current):
         self.__initcheck()
         self.__sizecheck(colNumbers, None)
         all_cols = self.cols(None, current)
@@ -593,7 +596,7 @@ class HdfStorage(object):
 
         return self._as_data(cols, rowNumbers)
 
-    @stamped
+    @read_locked
     def slice(self, stamp, colNumbers, rowNumbers, current):
         self.__initcheck()
 
@@ -617,8 +620,8 @@ class HdfStorage(object):
 
     def check(self):
         return True
-
-    @locked
+    
+    @write_locked
     def cleanup(self):
         self.logger.info("Cleaning storage: %s", self.__hdf_path)
         if self.__mea:
