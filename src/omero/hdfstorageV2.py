@@ -113,7 +113,6 @@ class HdfList(object):
 
     def __init__(self):
         self.logger = logging.getLogger("omero.tables.HdfList")
-        self._lock = threading.RLock()
         self._rwlock = ReadersWriterLock()
         self.__filenos = {}
         self.__paths = {}
@@ -164,11 +163,11 @@ class HdfList(object):
             storage = self.__paths[hdfpath]
         except KeyError:
             # Adds itself to the global list
-            storage = HdfStorage(hdfpath, self._lock, self._rwlock, read_only=read_only)
+            storage = HdfStorage(hdfpath, self._rwlock, read_only=read_only)
         storage.incr(table)
         return storage
 
-    @locked
+    @write_locked
     def remove(self, hdfpath, hdffile):
         del self.__filenos[hdffile.fileno()]
         del self.__paths[hdfpath]
@@ -184,7 +183,7 @@ class HdfStorage(object):
     instance will be available for any given physical HDF5 file.
     """
 
-    def __init__(self, file_path, hdf5lock, rwlock, read_only=False):
+    def __init__(self, file_path, rwlock, read_only=False):
         """
         file_path should be the path to a file in a valid directory where
         this HDF instance can be stored (Not None or Empty). Once this
@@ -203,7 +202,6 @@ class HdfStorage(object):
         self.__hdf_file = HDFLIST.addOrThrow(file_path, self, read_only)
         self.__tables = []
 
-        self._lock = hdf5lock
         self._rwlock = rwlock
         self._stamp = time.time()
 
