@@ -535,7 +535,7 @@ class HdfStorage(object):
 
     @write_locked
     @modifies
-    def update(self, stamp, data):
+    def update(self, data):
         self.__initcheck()
         if data:
             for i, rn in enumerate(data.rowNumbers):
@@ -543,7 +543,7 @@ class HdfStorage(object):
                     getattr(self.__mea.cols, col.name)[rn] = col.values[i]
 
     @read_locked
-    def getWhereList(self, stamp, condition, variables, unused,
+    def getWhereList(self, condition, variables, unused,
                      start, stop, step):
         self.__initcheck()
         try:
@@ -595,7 +595,7 @@ class HdfStorage(object):
         return self._as_data(cols, rowNumbers)
 
     @read_locked
-    def slice(self, stamp, colNumbers, rowNumbers, current):
+    def slice(self, colNumbers, rowNumbers, current):
         self.__initcheck()
 
         if colNumbers is None or len(colNumbers) == 0:

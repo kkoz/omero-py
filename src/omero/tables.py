@@ -221,7 +221,7 @@ class TableI(omero.grid.Table, omero.util.SimpleServant):
         if step == 0:
             step = None
         rv = self.storage.getWhereList(
-            self.stamp, condition, variables, None, start, stop, step)
+            condition, variables, None, start, stop, step)
         self.logger.info("%s.getWhereList(%s, %s, %s, %s, %s) => size=%s",
                          self, condition, variables,
                          start, stop, step, slen(rv))
@@ -232,8 +232,7 @@ class TableI(omero.grid.Table, omero.util.SimpleServant):
     def readCoordinates(self, rowNumbers, current=None):
         self.logger.info("%s.readCoordinates(size=%s)", self, slen(rowNumbers))
         try:
-            return self.storage.readCoordinates(self.stamp, rowNumbers,
-                                                current)
+            return self.storage.readCoordinates(rowNumbers, current)
         except tables.HDF5ExtError as err:
             aue = omero.ApiUsageException()
             aue.message = "Error reading coordinates. Most likely out of range"

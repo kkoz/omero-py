@@ -29,6 +29,7 @@ from library import TestCase
 from omero_ext.path import path
 
 import omero.hdfstorageV2 as storage_module
+from omero.util.readerswriterlock import ReadersWriterLock
 
 
 HdfList = storage_module.HdfList
@@ -53,7 +54,7 @@ class TestHdfStorage(TestCase):
         self.ic = Ice.initialize()
         self.current = Ice.Current()
         self.current.adapter = MockAdapter(self.ic)
-        self.lock = threading.RLock()
+        self.rwlock = ReadersWriterLock()
 
         for of in list(omero.columns.ObjectFactories.values()):
             of.register(self.ic)
@@ -88,47 +89,47 @@ class TestHdfStorage(TestCase):
         pytest.raises(
             omero.ApiUsageException, HdfStorage, None, None)
         pytest.raises(
-            omero.ApiUsageException, HdfStorage, '', self.lock)
+            omero.ApiUsageException, HdfStorage, '', self.rwlock)
         bad = path(self.tmpdir()) / "doesntexist" / "test.h5"
         pytest.raises(
-            omero.ApiUsageException, HdfStorage, bad, self.lock)
+            omero.ApiUsageException, HdfStorage, bad, self.rwlock)
 
     def testValidFile(self):
-        hdf = HdfStorage(self.hdfpath(), self.lock)
+        hdf = HdfStorage(self.hdfpath(), self.rwlock)
         hdf.cleanup()
 
     def testLocking(self):
         tmp = str(self.hdfpath())
-        hdf1 = HdfStorage(tmp, self.lock)
+        hdf1 = HdfStorage(tmp, self.rwlock)
         with pytest.raises(omero.LockTimeout) as exc_info:
-            HdfStorage(tmp, self.lock)
+            HdfStorage(tmp, self.rwlock)
         assert exc_info.value.message.startswith('Path already in HdfList: ')
         hdf1.cleanup()
-        hdf3 = HdfStorage(tmp, self.lock)
+        hdf3 = HdfStorage(tmp, self.rwlock)
         hdf3.cleanup()
 
     def testSimpleCreation(self):
-        hdf = HdfStorage(self.hdfpath(), self.lock)
+        hdf = HdfStorage(self.hdfpath(), self.rwlock)
         self.init(hdf, False)
         hdf.cleanup()
 
     def testCreationWithMetadata(self):
-        hdf = HdfStorage(self.hdfpath(), self.lock)
+        hdf = HdfStorage(self.hdfpath(), self.rwlock)
         self.init(hdf, True)
         hdf.cleanup()
 
     def testAddSingleRow(self):
-        hdf = HdfStorage(self.hdfpath(), self.lock)
+        hdf = HdfStorage(self.hdfpath(), self.rwlock)
         self.init(hdf, True)
         self.append(hdf, {"a": 1, "b": 2, "c": 3})
         hdf.cleanup()
 
     def testModifyRow(self):
-        hdf = HdfStorage(self.hdfpath(), self.lock)
+        hdf = HdfStorage(self.hdfpath(), self.rwlock)
         self.init(hdf, True)
         self.append(hdf, {"a": 1, "b": 2, "c": 3})
         self.append(hdf, {"a": 5, "b": 6, "c": 7})
-        data = hdf.readCoordinates(hdf._stamp, [0, 1], self.current)
+        data = hdf.readCoordinates([0, 1], self.current)
         assert len(data.columns) == 3
         assert 1 == data.columns[0].values[0]
         assert 5 == data.columns[0].values[1]
@@ -141,8 +142,8 @@ class TestHdfStorage(TestCase):
         data.columns[0].values[1] = 200
         data.columns[1].values[0] = 300
         data.columns[1].values[1] = 400
-        hdf.update(hdf._stamp, data)
-        hdf.readCoordinates(hdf._stamp, [0, 1], self.current)
+        hdf.update(data)
+        hdf.readCoordinates([0, 1], self.current)
         assert len(data.columns) == 3
         assert 100 == data.columns[0].values[0]
         assert 200 == data.columns[0].values[1]
@@ -153,21 +154,21 @@ class TestHdfStorage(TestCase):
         hdf.cleanup()
 
     def testReadTicket1951(self):
-        hdf = HdfStorage(self.hdfpath(), self.lock)
+        hdf = HdfStorage(self.hdfpath(), self.rwlock)
         self.init(hdf, True)
         self.append(hdf, {"a": 1, "b": 2, "c": 3})
-        data = hdf.readCoordinates(hdf._stamp, [0], self.current)
+        data = hdf.readCoordinates([0], self.current)
         assert 1 == data.columns[0].values[0]
         assert 2 == data.columns[1].values[0]
         assert 3 == data.columns[2].values[0]
-        data = hdf.read(hdf._stamp, [0, 1, 2], 0, 1, self.current)
+        data = hdf.read([0, 1, 2], 0, 1, self.current)
         assert 1 == data.columns[0].values[0]
         assert 2 == data.columns[1].values[0]
         assert 3 == data.columns[2].values[0]
         hdf.cleanup()
 
     def testSorting(self):  # Probably shouldn't work
-        hdf = HdfStorage(self.hdfpath(), self.lock)
+        hdf = HdfStorage(self.hdfpath(), self.rwlock)
         self.init(hdf, True)
         self.append(hdf, {"a": 0, "b": 2, "c": 3})
         self.append(hdf, {"a": 4, "b": 4, "c": 4})
@@ -175,12 +176,12 @@ class TestHdfStorage(TestCase):
         self.append(hdf, {"a": 0, "b": 0, "c": 0})
         self.append(hdf, {"a": 0, "b": 4, "c": 0})
         self.append(hdf, {"a": 0, "b": 0, "c": 0})
-        hdf.getWhereList(time.time(), '(a==0)', None, 'b', None, None, None)
+        hdf.getWhereList('(a==0)', None, 'b', None, None, None)
         # Doesn't work yet.
         hdf.cleanup()
 
     def testInitializeInvalidColoumnNames(self):
-        hdf = HdfStorage(self.hdfpath(), self.lock)
+        hdf = HdfStorage(self.hdfpath(), self.rwlock)
 
         with pytest.raises(omero.ApiUsageException) as exc:
             hdf.initialize([omero.columns.LongColumnI('')], None)
@@ -195,10 +196,10 @@ class TestHdfStorage(TestCase):
 
     def testInitializationOnInitializedFileFails(self):
         p = self.hdfpath()
-        hdf = HdfStorage(p, self.lock)
+        hdf = HdfStorage(p, self.rwlock)
         self.init(hdf, True)
         hdf.cleanup()
-        hdf = HdfStorage(p, self.lock)
+        hdf = HdfStorage(p, self.rwlock)
         try:
             self.init(hdf, True)
             assert False
@@ -222,13 +223,13 @@ class TestHdfStorage(TestCase):
         t = path(self.tmpdir())
         h = old_div(t, "test.h5")
         assert t.exists()
-        hdf = HdfStorage(h, self.lock)
+        hdf = HdfStorage(h, self.rwlock)
         hdf.cleanup()
 
     @pytest.mark.xfail
     @pytest.mark.broken(reason = "TODO after python3 migration")
     def testGetSetMetaMap(self):
-        hdf = HdfStorage(self.hdfpath(), self.lock)
+        hdf = HdfStorage(self.hdfpath(), self.rwlock)
         self.init(hdf, False)
 
         hdf.add_meta_map({'a': rint(1)})
@@ -263,27 +264,27 @@ class TestHdfStorage(TestCase):
     def testStringCol(self):
         # Tables size is in bytes, len("მიკროსკოპის პონი".encode()) == 46
         bytesize = 46
-        hdf = HdfStorage(self.hdfpath(), self.lock)
+        hdf = HdfStorage(self.hdfpath(), self.rwlock)
         cols = [omero.columns.StringColumnI(
             "name", "description", bytesize, None)]
         hdf.initialize(cols)
         cols[0].settable(hdf._HdfStorage__mea)  # Needed for size
         cols[0].values = ["foo", "მიკროსკოპის პონი"]
         hdf.append(cols)
-        rows = hdf.getWhereList(time.time(), '(name=="foo")', None, 'b', None,
+        rows = hdf.getWhereList('(name=="foo")', None, 'b', None,
                                 None, None)
         assert rows == [0]
         assert bytesize == hdf.readCoordinates(
-            time.time(), [0], self.current).columns[0].size
+            [0], self.current).columns[0].size
         # Unicode conditions don't work on Python 3
         # Fetching should still work though
-        r1 = hdf.readCoordinates(time.time(), [1], self.current)
+        r1 = hdf.readCoordinates([1], self.current)
         assert len(r1.columns) == 1
         assert len(r1.columns[0].values) == 1
         assert r1.columns[0].size == bytesize
         assert r1.columns[0].values[0] == "მიკროსკოპის პონი"
 
-        r2 = hdf.read(time.time(), [0], 0, 2, self.current)
+        r2 = hdf.read([0], 0, 2, self.current)
         assert len(r2.columns) == 1
         assert len(r2.columns[0].values) == 2
         assert r2.columns[0].size == bytesize
@@ -297,7 +298,7 @@ class TestHdfStorage(TestCase):
         # len("მიკროსკოპის პონი") == 16
         # len("მიკროსკოპის პონი".encode()) == 46
         bytesize = 45
-        hdf = HdfStorage(self.hdfpath(), self.lock)
+        hdf = HdfStorage(self.hdfpath(), self.rwlock)
         cols = [omero.columns.StringColumnI(
             "name", "description", bytesize, None)]
         hdf.initialize(cols)
@@ -319,14 +320,14 @@ class TestHdfStorage(TestCase):
     def testStringColWhereUnicode(self):
         # Tables size is in bytes, len("მიკროსკოპის პონი".encode()) == 46
         bytesize = 46
-        hdf = HdfStorage(self.hdfpath(), self.lock)
+        hdf = HdfStorage(self.hdfpath(), self.rwlock)
         cols = [omero.columns.StringColumnI(
             "name", "description", bytesize, None)]
         hdf.initialize(cols)
         cols[0].settable(hdf._HdfStorage__mea)  # Needed for size
         cols[0].values = ["foo", "მიკროსკოპის პონი"]
         hdf.append(cols)
-        rows = hdf.getWhereList(time.time(), '(name=="მიკროსკოპის პონი")',
+        rows = hdf.getWhereList('(name=="მიკროსკოპის პონი")',
                                 None, 'b', None, None, None)
         assert rows == [1]
         assert bytesize == hdf.readCoordinates(
@@ -335,7 +336,7 @@ class TestHdfStorage(TestCase):
         hdf.cleanup()
 
     def testRead(self):
-        hdf = HdfStorage(self.hdfpath(), self.lock)
+        hdf = HdfStorage(self.hdfpath(), self.rwlock)
         cols = [
             omero.columns.LongColumnI('a'),
             omero.columns.LongColumnI('b'),
@@ -346,7 +347,7 @@ class TestHdfStorage(TestCase):
         cols[2].values = [7, 8, 9]
         hdf.append(cols)
 
-        data = hdf.read(time.time(), [0, 1, 2], 0, 2, self.current)
+        data = hdf.read([0, 1, 2], 0, 2, self.current)
         assert len(data.columns) == 3
         assert len(data.columns[0].values) == 2
         assert data.columns[0].name == 'a'
@@ -360,7 +361,7 @@ class TestHdfStorage(TestCase):
         assert data.columns[2].values[1] == 8
         assert data.rowNumbers == [0, 1]
 
-        data = hdf.read(time.time(), [0, 2], 1, 3, self.current)
+        data = hdf.read([0, 2], 1, 3, self.current)
         assert len(data.columns) == 2
         assert len(data.columns[0].values) == 2
         assert data.columns[0].name == 'a'
@@ -372,7 +373,7 @@ class TestHdfStorage(TestCase):
         assert data.rowNumbers == [1, 2]
 
         # Reads row 1
-        data = hdf.read(time.time(), [1], 1, 2, self.current)
+        data = hdf.read([1], 1, 2, self.current)
         assert len(data.columns) == 1
         assert len(data.columns[0].values) == 1
         assert data.columns[0].name == 'b'
@@ -380,13 +381,13 @@ class TestHdfStorage(TestCase):
         assert data.rowNumbers == [1]
 
        # Reads no row
-        data = hdf.read(time.time(), [0, 1, 2], 1, 1, self.current)
+        data = hdf.read([0, 1, 2], 1, 1, self.current)
         assert len(data.columns) == 3
         assert len(data.columns[0].values) == 0
         assert data.rowNumbers == []
 
         # Read all rows
-        data = hdf.read(time.time(), [0, 1, 2], None, None, self.current)
+        data = hdf.read([0, 1, 2], None, None, self.current)
         assert len(data.columns) == 3
         assert len(data.columns[0].values) == 3
         assert data.columns[0].name == 'a'
@@ -404,7 +405,7 @@ class TestHdfStorage(TestCase):
         assert data.rowNumbers == [0, 1, 2]
 
         # Read from row 1 until the end of the table
-        data = hdf.read(time.time(), [0, 2], 1, None, self.current)
+        data = hdf.read([0, 2], 1, None, self.current)
         assert len(data.columns) == 2
         assert len(data.columns[0].values) == 2
         assert data.columns[0].name == 'a'
@@ -420,7 +421,7 @@ class TestHdfStorage(TestCase):
     # ROIs
     #
     def testMaskColumn(self):
-        hdf = HdfStorage(self.hdfpath(), self.lock)
+        hdf = HdfStorage(self.hdfpath(), self.rwlock)
         mask = omero.columns.MaskColumnI('mask', 'desc', None)
         hdf.initialize([mask], None)
         mask.imageId = [1, 2]
@@ -432,7 +433,7 @@ class TestHdfStorage(TestCase):
         mask.h = [7, 7]
         mask.bytes = [[0], [0, 1, 2, 3, 4]]
         hdf.append([mask])
-        data = hdf.readCoordinates(hdf._stamp, [0, 1], self.current)
+        data = hdf.readCoordinates([0, 1], self.current)
         assert len(data.columns) == 1
         assert len(data.columns[0].imageId) == 2
         assert 1 == data.columns[0].imageId[0]
@@ -453,7 +454,7 @@ class TestHdfStorage(TestCase):
         assert 7 == data.columns[0].h[1]
         assert [0, 1, 2, 3, 4] == data.columns[0].bytes[1]
 
-        data = hdf.read(hdf._stamp, [0], 0, 1, self.current)
+        data = hdf.read([0], 0, 1, self.current)
         assert len(data.columns) == 1
         assert len(data.columns[0].imageId) == 1
         assert 1 == data.columns[0].imageId[0]
@@ -480,20 +481,20 @@ class TestHdfList(TestCase):
     @pytest.mark.xfail
     @pytest.mark.broken(reason = "TODO after python3 migration")
     def testLocking(self, monkeypatch):
-        lock1 = threading.RLock()
+        rwlock1 = ReadersWriterLock()
         hdflist2 = HdfList()
-        lock2 = threading.RLock()
+        rwlock2 = ReadersWriterLock()
         tmp = str(self.hdfpath())
 
         # Using HDFLIST
-        hdf1 = HdfStorage(tmp, lock1)
+        hdf1 = HdfStorage(tmp, rwlock1)
 
         # There are multiple guards against opening the same HDF5 file
 
         # PyTables includes a check
         monkeypatch.setattr(storage_module, 'HDFLIST', hdflist2)
         with pytest.raises(ValueError) as exc_info:
-            HdfStorage(tmp, lock2)
+            HdfStorage(tmp, rwlock2)
 
         assert exc_info.value.message.startswith(
             "The file '%s' is already opened. " % tmp)
@@ -516,7 +517,7 @@ class TestHdfList(TestCase):
 
         monkeypatch.setattr(storage_module, 'HDFLIST', hdflist2)
         with pytest.raises(omero.LockTimeout) as exc_info:
-            HdfStorage(tmp, lock2)
+            HdfStorage(tmp, rwlock2)
         print(exc_info.value)
         assert (exc_info.value.message ==
                 'Cannot acquire exclusive lock on: %s' % tmp)
