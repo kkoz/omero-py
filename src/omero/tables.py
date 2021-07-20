@@ -64,7 +64,6 @@ class TableI(omero.grid.Table, omero.util.SimpleServant):
             file_obj, call_context)
         omero.util.SimpleServant.__init__(self, ctx)
 
-        self.stamp = time.time()
         self._closed = False
 
         if (not self.file_obj.isLoaded() or
@@ -247,7 +246,7 @@ class TableI(omero.grid.Table, omero.util.SimpleServant):
         if start == 0 and stop == 0:
             stop = None
         try:
-            return self.storage.read(self.stamp, colNumbers,
+            return self.storage.read(colNumbers,
                                      start, stop, current)
         except tables.HDF5ExtError as err:
             aue = omero.ApiUsageException()
@@ -262,7 +261,7 @@ class TableI(omero.grid.Table, omero.util.SimpleServant):
         self.logger.info(
             "%s.slice(size=%s, size=%s)", self,
             slen(colNumbers), slen(rowNumbers))
-        return self.storage.slice(self.stamp, colNumbers, rowNumbers, current)
+        return self.storage.slice(colNumbers, rowNumbers, current)
 
     # TABLES WRITE API ===========================
 
@@ -294,7 +293,7 @@ class TableI(omero.grid.Table, omero.util.SimpleServant):
     def update(self, data, current=None):
         self.assert_write()
         if data:
-            self.storage.update(self.stamp, data)
+            self.storage.update(data)
             self.logger.info(
                 "Updated %s row(s) of data to %s", slen(data.rowNumbers), self)
 

@@ -56,34 +56,6 @@ def internal_attr(s):
     return s.startswith('__')
 
 
-def stamped(func, update=False):
-    """
-    Decorator which takes the first argument after "self" and compares
-    that to the last modification time. If the stamp is older, then the
-    method call will throw an omero.OptimisticLockException. Otherwise,
-    execution will complete normally. If update is True, then the
-    last modification time will be updated after the method call if it
-    is successful.
-
-    Note: stamped implies locked
-
-    """
-    def check_and_update_stamp(*args, **kwargs):
-        self = args[0]
-        stamp = args[1]
-        if stamp < self._stamp:
-            raise omero.OptimisticLockException(
-                None, None, "Resource modified by another thread")
-
-        try:
-            return func(*args, **kwargs)
-        finally:
-            if update:
-                self._stamp = time.time()
-    check_and_update_stamp = wraps(func)(check_and_update_stamp)
-    return locked(check_and_update_stamp)
-
-
 def modifies(func):
     """
     Decorator which always calls flush() on the first argument after the
@@ -116,45 +88,8 @@ class HdfList(object):
         self._rwlock = ReadersWriterLock()
         self.__filenos = {}
         self.__paths = {}
+        self.__refcounts = {}
 
-    @write_locked
-    def addOrThrow(self, hdfpath, hdfstorage, read_only=False):
-
-        if hdfpath in self.__paths:
-            raise omero.LockTimeout(
-                None, None, "Path already in HdfList: %s" % hdfpath)
-
-        parent = path(hdfpath).parent
-        if not parent.exists():
-            raise omero.ApiUsageException(
-                None, None, "Parent directory does not exist: %s" % parent)
-
-        mode = read_only and "r" or "a"
-        hdffile = hdfstorage.openfile(mode)
-        fileno = hdffile.fileno()
-
-        if not read_only:
-            try:
-                portalocker.lockno(
-                    fileno, portalocker.LOCK_NB | portalocker.LOCK_EX)
-            except portalocker.LockException:
-                hdffile.close()
-                raise omero.LockTimeout(
-                    None, None,
-                    "Cannot acquire exclusive lock on: %s" % hdfpath, 0)
-            except:
-                hdffile.close()
-                raise
-
-        if fileno in list(self.__filenos.keys()):
-            hdffile.close()
-            raise omero.LockTimeout(
-                None, None, "File already opened by process: %s" % hdfpath, 0)
-        else:
-            self.__filenos[fileno] = hdfstorage
-            self.__paths[hdfpath] = hdfstorage
-
-        return hdffile
 
     @write_locked
     def getOrCreate(self, hdfpath, table, read_only=False):
@@ -163,14 +98,59 @@ class HdfList(object):
             storage = self.__paths[hdfpath]
         except KeyError:
             # Adds itself to the global list
+            parent = path(hdfpath).parent
+            if not parent.exists():
+                raise omero.ApiUsageException(
+                    None, None, "Parent directory does not exist: %s" % parent)
+
             storage = HdfStorage(hdfpath, self._rwlock, read_only=read_only)
-        storage.incr(table)
+            fileno = storage.getHdfFile().fileno()
+            if not read_only:
+                try:
+                    portalocker.lockno(
+                        fileno, portalocker.LOCK_NB | portalocker.LOCK_EX)
+                except portalocker.LockException:
+                    hdffile.close()
+                    raise omero.LockTimeout(
+                        None, None,
+                        "Cannot acquire exclusive lock on: %s" % hdfpath, 0)
+                except:
+                    hdffile.close()
+                    raise
+
+            if fileno in list(self.__filenos.keys()):
+                hdffile.close()
+                raise omero.LockTimeout(
+                    None, None, "File already opened by process: %s" % hdfpath, 0)
+            else:
+                self.__filenos[fileno] = storage
+                self.__paths[hdfpath] = storage
+        self.incr(hdfpath)
         return storage
 
     @write_locked
     def remove(self, hdfpath, hdffile):
         del self.__filenos[hdffile.fileno()]
         del self.__paths[hdfpath]
+
+    @write_locked
+    def incr(self, hdfpath):
+        if hdfpath not in self.__refcounts:
+            self.__refcounts[hdfpath] = 1
+        else:
+            self.__refcounts[hdfpath] += 1
+
+
+    @write_locked
+    def decr(self, hdfpath):
+        self.__refcounts[hdfpath] -= 1
+        if self.__refcounts[hdfpath] <= 0:
+            # Clean up the storage
+            storage = self.__paths[hdfpath]
+            hdffile = storage.getHdfFile()
+            self.remove(hdfpath, hdffile)
+            storage.cleanup()
+
 
 # Global object for maintaining files
 HDFLIST = HdfList()
@@ -199,7 +179,9 @@ class HdfStorage(object):
         self.__hdf_path = path(file_path)
         # Locking first as described at:
         # http://www.pytables.org/trac/ticket/185
-        self.__hdf_file = HDFLIST.addOrThrow(file_path, self, read_only)
+        #self.__hdf_file = HDFLIST.addOrThrow(file_path, self, read_only)
+        mode = read_only and "r" or "a"
+        self.__hdf_file = self.openfile(mode)
         self.__tables = []
 
         self._rwlock = rwlock
@@ -226,6 +208,9 @@ class HdfStorage(object):
 
     def size(self):
         return self.__hdf_path.size
+
+    def getHdfFile(self):
+        return self.__hdf_file
 
     def openfile(self, mode, policy='default'):
         tables.file._FILE_OPEN_POLICY = policy
@@ -385,30 +370,6 @@ class HdfStorage(object):
 
         self.__hdf_file.flush()
         self.__initialized = True
-
-    @write_locked
-    def incr(self, table):
-        sz = len(self.__tables)
-        self.logger.info("Size: %s - Attaching %s to %s" %
-                         (sz, table, self.__hdf_path))
-        if table in self.__tables:
-            self.logger.warn("Already added")
-            raise omero.ApiUsageException(None, None, "Already added")
-        self.__tables.append(table)
-        return sz + 1
-
-    @write_locked
-    def decr(self, table):
-        sz = len(self.__tables)
-        self.logger.info(
-            "Size: %s - Detaching %s from %s", sz, table, self.__hdf_path)
-        if not (table in self.__tables):
-            self.logger.warn("Unknown table")
-            raise omero.ApiUsageException(None, None, "Unknown table")
-        self.__tables.remove(table)
-        if sz <= 1:
-            self.cleanup()
-        return sz - 1
 
     @read_locked
     def uptodate(self, stamp):
@@ -626,8 +587,6 @@ class HdfStorage(object):
             self.__mea = None
         if self.__ome:
             self.__ome = None
-        if self.__hdf_file:
-            HDFLIST.remove(self.__hdf_path, self.__hdf_file)
         hdffile = self.__hdf_file
         self.__hdf_file = None
         hdffile.close()  # Resources freed
