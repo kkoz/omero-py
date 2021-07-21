@@ -139,11 +139,13 @@ class HdfList(object):
             self.__refcounts[hdfpath] = 1
         else:
             self.__refcounts[hdfpath] += 1
+        self.logger.info("incr ref count is now " + str(self.__refcounts[hdfpath]))
 
 
     @write_locked
     def decr(self, hdfpath):
         self.__refcounts[hdfpath] -= 1
+        self.logger.info("decr ref count is now " + str(self.__refcounts[hdfpath]))
         if self.__refcounts[hdfpath] <= 0:
             # Clean up the storage
             storage = self.__paths[hdfpath]
@@ -211,6 +213,9 @@ class HdfStorage(object):
 
     def getHdfFile(self):
         return self.__hdf_file
+
+    def getHdfPath(self):
+        return self.__hdf_path
 
     def openfile(self, mode, policy='default'):
         tables.file._FILE_OPEN_POLICY = policy
