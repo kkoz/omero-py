@@ -57,6 +57,7 @@ class TableI(omero.grid.Table, omero.util.SimpleServant):
         self.uuid = uuid
         self.file_obj = file_obj
         self.factory = factory
+        self.storage_factory = storage_factory
         self.storage = storage_factory.getOrCreate(file_path, self, read_only)
         self.call_context = call_context
         self.adapter = adapter
@@ -64,7 +65,6 @@ class TableI(omero.grid.Table, omero.util.SimpleServant):
             file_obj, call_context)
         omero.util.SimpleServant.__init__(self, ctx)
 
-        self.stamp = time.time()
         self._closed = False
 
         if (not self.file_obj.isLoaded() or
@@ -119,7 +119,7 @@ class TableI(omero.grid.Table, omero.util.SimpleServant):
         """
         if self.storage:
             try:
-                self.storage.decr(self)
+                self.storage_factory.decr(self.storage.getHdfPath())
                 return self.storage.size()
             finally:
                 self.storage = None
@@ -149,7 +149,8 @@ class TableI(omero.grid.Table, omero.util.SimpleServant):
         try:
             size = self.cleanup()
             self.logger.info("Closed %s", self)
-        except:
+        except Exception as e:
+            self.logger.exception("Error closing table")
             self.logger.warn("Closed %s with errors", self)
 
         self._closed = True
@@ -190,50 +191,62 @@ class TableI(omero.grid.Table, omero.util.SimpleServant):
     @remoted
     @perf
     def getOriginalFile(self, current=None):
-        msg = "unknown"
-        if self.file_obj:
-            if self.file_obj.id:
-                msg = self.file_obj.id.val
-        self.logger.info("%s.getOriginalFile() => id=%s", self, msg)
-        return self.file_obj
+        try:
+            msg = "unknown"
+            if self.file_obj:
+                if self.file_obj.id:
+                    msg = self.file_obj.id.val
+            self.logger.info("%s.getOriginalFile() => id=%s", self, msg)
+            return self.file_obj
+        except Exception as e:
+            self.logger.exception("Error in getOriginalFile")
 
     @remoted
     @perf
     def getHeaders(self, current=None):
-        rv = self.storage.cols(None, current)
-        self.logger.info("%s.getHeaders() => size=%s", self, slen(rv))
-        return rv
+        try:
+            rv = self.storage.cols(None, current)
+            self.logger.info("%s.getHeaders() => size=%s", self, slen(rv))
+            return rv
+        except Exception as e:
+            self.logger.exception("Error in getHeaders")
 
     @remoted
     @perf
     def getNumberOfRows(self, current=None):
-        rv = self.storage.rows()
-        self.logger.info("%s.getNumberOfRows() => %s", self, rv)
-        return int(rv)
+        try:
+            rv = self.storage.rows()
+            self.logger.info("%s.getNumberOfRows() => %s", self, rv)
+            return int(rv)
+        except Exception as e:
+            self.logger.exception("Error in getNumberOfRows")
 
     @remoted
     @perf
     def getWhereList(self, condition, variables,
                      start, stop, step, current=None):
-        variables = unwrap(variables)
-        if stop == 0:
-            stop = None
-        if step == 0:
-            step = None
-        rv = self.storage.getWhereList(
-            self.stamp, condition, variables, None, start, stop, step)
-        self.logger.info("%s.getWhereList(%s, %s, %s, %s, %s) => size=%s",
-                         self, condition, variables,
-                         start, stop, step, slen(rv))
-        return rv
+        try:
+            variables = unwrap(variables)
+            if stop == 0:
+                stop = None
+            if step == 0:
+                step = None
+            rv = self.storage.getWhereList(
+                condition, variables, None, start, stop, step)
+            self.logger.info("%s.getWhereList(%s, %s, %s, %s, %s) => size=%s",
+                             self, condition, variables,
+                             start, stop, step, slen(rv))
+            return rv
+        except Exception as e:
+            self.logger.exception("Error in getWhereList")
+            return None
 
     @remoted
     @perf
     def readCoordinates(self, rowNumbers, current=None):
         self.logger.info("%s.readCoordinates(size=%s)", self, slen(rowNumbers))
         try:
-            return self.storage.readCoordinates(self.stamp, rowNumbers,
-                                                current)
+            return self.storage.readCoordinates(rowNumbers, current)
         except tables.HDF5ExtError as err:
             aue = omero.ApiUsageException()
             aue.message = "Error reading coordinates. Most likely out of range"
@@ -248,7 +261,7 @@ class TableI(omero.grid.Table, omero.util.SimpleServant):
         if start == 0 and stop == 0:
             stop = None
         try:
-            return self.storage.read(self.stamp, colNumbers,
+            return self.storage.read(colNumbers,
                                      start, stop, current)
         except tables.HDF5ExtError as err:
             aue = omero.ApiUsageException()
@@ -263,7 +276,7 @@ class TableI(omero.grid.Table, omero.util.SimpleServant):
         self.logger.info(
             "%s.slice(size=%s, size=%s)", self,
             slen(colNumbers), slen(rowNumbers))
-        return self.storage.slice(self.stamp, colNumbers, rowNumbers, current)
+        return self.storage.slice(colNumbers, rowNumbers, current)
 
     # TABLES WRITE API ===========================
 
@@ -295,7 +308,7 @@ class TableI(omero.grid.Table, omero.util.SimpleServant):
     def update(self, data, current=None):
         self.assert_write()
         if data:
-            self.storage.update(self.stamp, data)
+            self.storage.update(data)
             self.logger.info(
                 "Updated %s row(s) of data to %s", slen(data.rowNumbers), self)
 
@@ -519,23 +532,27 @@ class TablesI(omero.grid.Tables, omero.util.Servant):
         """
 
         # Will throw an exception if not allowed.
-        file_id = None
-        if file_obj is not None and file_obj.id is not None:
-            file_id = file_obj.id.val
-        self.logger.info("getTable: %s %s", file_id, current.ctx)
+        try:
+            file_id = None
+            if file_obj is not None and file_obj.id is not None:
+                file_id = file_obj.id.val
+            self.logger.info("getTable: %s %s", file_id, current.ctx)
 
-        file_path = self.repo_mgr.getFilePath(file_obj)
-        p = path(file_path).dirname()
-        if not p.exists():
-            p.makedirs()
+            file_path = self.repo_mgr.getFilePath(file_obj)
+            p = path(file_path).dirname()
+            if not p.exists():
+                p.makedirs()
 
-        table = TableI(self.ctx, file_obj,file_path,
-                       factory,
-                       self._storage_factory,
-                       read_only=self.read_only,
-                       uuid=Ice.generateUUID(),
-                       call_context=current.ctx,
-                       adapter=current.adapter)
-        self.resources.add(table)
-        prx = current.adapter.add(table, table.id)
-        return self._table_cast(prx)
+            table = TableI(self.ctx, file_obj,file_path,
+                           factory,
+                           self._storage_factory,
+                           read_only=self.read_only,
+                           uuid=Ice.generateUUID(),
+                           call_context=current.ctx,
+                           adapter=current.adapter)
+            self.resources.add(table)
+            prx = current.adapter.add(table, table.id)
+            return self._table_cast(prx)
+        except Exception as e:
+            self.logger.exception("Exception in getTable")
+            return None
