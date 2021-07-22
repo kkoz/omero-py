@@ -14,15 +14,19 @@ class ReadersWriterLock(object):
 
     def acquire_read_lock(self):
         self._rwlock.acquire()
-        self._readers_count += 1
-        self._rwlock.release()
+        try:
+            self._readers_count += 1
+        finally:
+            self._rwlock.release()
         
     def release_read_lock(self):
         self._rwlock.acquire()
-        self._readers_count -= 1
-        if self._readers_count == 0:
-            self._rwlock.notifyAll()
-        self._rwlock.release()
+        try:
+            self._readers_count -= 1
+            if self._readers_count <= 0:
+                self._rwlock.notify_all()
+        finally:
+            self._rwlock.release()
 
     def acquire_write_lock(self):
         self._rwlock.acquire()

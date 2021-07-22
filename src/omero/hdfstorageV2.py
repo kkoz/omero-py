@@ -376,16 +376,16 @@ class HdfStorage(object):
         self.__hdf_file.flush()
         self.__initialized = True
 
-    @read_locked
+    @write_locked
     def uptodate(self, stamp):
         return self._stamp <= stamp
 
-    @read_locked
+    @write_locked
     def rows(self):
         self.__initcheck()
         return self.__mea.nrows
 
-    @read_locked
+    @write_locked
     def cols(self, size, current):
         self.__initcheck()
         ic = current.adapter.getCommunicator()
@@ -414,7 +414,7 @@ class HdfStorage(object):
                     None, msg, "BAD COLUMN TYPE: %s for %s" % (t, n))
         return cols
 
-    @read_locked
+    @write_locked
     def get_meta_map(self):
         self.__initcheck()
         metadata = {}
@@ -495,10 +495,6 @@ class HdfStorage(object):
 
         self.__mea.append(records)
 
-    #
-    # Stamped methods
-    #
-
     @write_locked
     @modifies
     def update(self, data):
@@ -508,7 +504,7 @@ class HdfStorage(object):
                 for col in data.columns:
                     getattr(self.__mea.cols, col.name)[rn] = col.values[i]
 
-    @read_locked
+    @write_locked
     def getWhereList(self, condition, variables, unused,
                      start, stop, step):
         self.__initcheck()
@@ -533,7 +529,7 @@ class HdfStorage(object):
         data.lastModification = int(self._stamp * 1000)
         return data
 
-    @read_locked
+    @write_locked
     def readCoordinates(self, rowNumbers, current):
         self.__initcheck()
         self.__sizecheck(None, rowNumbers)
@@ -542,7 +538,7 @@ class HdfStorage(object):
             col.readCoordinates(self.__mea, rowNumbers)
         return self._as_data(cols, rowNumbers)
 
-    @read_locked
+    @write_locked
     def read(self, colNumbers, start, stop, current):
         self.__initcheck()
         self.__sizecheck(colNumbers, None)
@@ -560,7 +556,7 @@ class HdfStorage(object):
 
         return self._as_data(cols, rowNumbers)
 
-    @read_locked
+    @write_locked
     def slice(self, colNumbers, rowNumbers, current):
         self.__initcheck()
 
