@@ -26,6 +26,9 @@ from library import TestCase
 from omero.columns import LongColumnI, DoubleColumnI, ObjectFactories
 from omero_ext.path import path
 
+import pdb
+import time
+
 logging.basicConfig(level=logging.DEBUG)
 
 # Don't retry since we expect errors
@@ -230,6 +233,8 @@ class TestTables(TestCase):
         This is caused by the reuse of TableI instances after the Tables go
         out of scope.
         """
+        #pdb.set_trace()
+        #time.sleep(2)
         for t in self.__tables:
             t.__del__()
 
@@ -333,16 +338,6 @@ class TestTables(TestCase):
         table2 = omero.tables.TableI(self.ctx, f, str(storage._HdfStorage__hdf_path), self.sf, storage_factory)
         table2.cleanup()
         table1.cleanup()
-
-    def testTableModifications(self):
-        mocktable = self.testTables()
-        table = mocktable.table
-        storage = table.storage
-        storage.initialize([LongColumnI("a", None, [])])
-        assert storage.uptodate(table.stamp)
-        storage._stamp += 1  # Not really allowed
-        assert not storage.uptodate(table.stamp)
-        table.cleanup()
 
     def testTableAddData(self, newfile=True, cleanup=True):
         mocktable = self.testTables(newfile)
